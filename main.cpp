@@ -1,6 +1,12 @@
+#include <cstdint>
+#include <cstdlib>
 #include <iostream>
+#include <cstring>
+#include <unistd.h>
+
 #include "table.h"
 #include "type.h"
+
 using namespace db::table;
 using namespace db::type;
 
@@ -25,14 +31,6 @@ inline void read_input(InputBuffer &buffer)
     // -1 is \0
     buffer.input_length = bytes_read - 1;
     buffer.buffer[bytes_read - 1] = 0;
-}
-
-inline MetaCommandResult do_meta_command(InputBuffer &buffer)
-{
-    if (std::strcmp(buffer.buffer, ".exit") == 0) {
-        exit(EXIT_SUCCESS);
-    }
-    return MetaCommandResult::META_COMMAND_UNRECOGNIZED_COMMAND;
 }
 
 inline PrepareResult prepare_statement(InputBuffer &input_buffer, Statement &statement)
@@ -63,8 +61,10 @@ inline ExecuteResult execute_insert(const Statement &statement, Table &table)
     }
 
     auto &row_to_insert = statement.row_to_insert;
+    Cursor cursor = table_end(table);
     // save to table page
-    serialize_row(&row_to_insert, row_slot(table, table.num_rows));
+    // serialize_row(&row_to_insert, row_slot(table, table.num_rows));
+    serialize_row(&row_to_insert, cursor_value(cursor));
     table.num_rows += 1;
 
     return ExecuteResult::EXECUTE_SUCCESS;
@@ -72,11 +72,15 @@ inline ExecuteResult execute_insert(const Statement &statement, Table &table)
 
 inline ExecuteResult execute_select(const Statement &statement, Table &table)
 {
+    Cursor cursor = table_start(table);
+
     Row row{};
-    for (uint32_t i = 0; i < table.num_rows; i++) {
-        deserialize_row(row_slot(table, i), &row);
+    while (!(cursor.end_of_table)) {
+        deserialize_row(cursor_value(cursor), &row);
         print_row(row);
+        cursor_advance(cursor);
     }
+
     return ExecuteResult::EXECUTE_SUCCESS;
 }
 
@@ -90,10 +94,75 @@ inline ExecuteResult execute_statement(const Statement &statement, Table &table)
     }
 }
 
-int main()
+Table db_open(const char* filename)
 {
-    InputBuffer input_buffer{};
+    Pager pager = pager_open(filename);
+    uint32_t num_rows = pager.file_length / ROW_SIZE;
+
     Table table{};
+    table.num_rows = num_rows;
+    table.pager = pager;
+
+    return std::move(table);
+}
+
+void db_close(Table& table)
+{
+    Pager pager = table.pager;
+    uint32_t num_full_pages = table.num_rows / ROWS_PER_PAGE;
+    
+    for (uint32_t i = 0; i < num_full_pages; i++) {
+        if (pager.pages[i] == nullptr) continue;
+
+        pager_flush(pager, i, PAGE_SIZE);
+        std::free(pager.pages[i]);
+        pager.pages[i] = nullptr;
+    }
+
+    uint32_t num_additional_rows = table.num_rows % ROWS_PER_PAGE;
+    if (num_additional_rows > 0) {
+        uint32_t page_num = num_full_pages;
+        if (pager.pages[page_num] != nullptr) {
+            pager_flush(pager, page_num, num_additional_rows * ROW_SIZE);
+            std::free(pager.pages[page_num]);
+            pager.pages[page_num] = nullptr;
+        }
+    }
+
+    int result = close(pager.file_descriptor);;
+    if (result == -1) {
+        printf("Error closing db file.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) {
+        void* page = pager.pages[i];
+        if (page) {
+            std::free(page);
+            pager.pages[i] = nullptr;
+        }
+    }
+}
+
+inline MetaCommandResult do_meta_command(InputBuffer &buffer, Table& table)
+{
+    if (std::strcmp(buffer.buffer, ".exit") == 0) {
+        db_close(table);
+        exit(EXIT_SUCCESS);
+    }
+    return MetaCommandResult::META_COMMAND_UNRECOGNIZED_COMMAND;
+}
+
+int main(int argc, char* argv[])
+{
+    if (argc < 2) {
+        printf("Must supply a database filename.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    char* filename = argv[1];
+    Table table = db_open(filename);
+    InputBuffer input_buffer{};
 
     while (true) {
         print_prompt();
@@ -101,7 +170,7 @@ int main()
 
         if (std::strcmp(input_buffer.buffer, ".exit") == 0) {
             if (input_buffer.buffer[0] == '.') {
-                switch (do_meta_command(input_buffer)) {
+                switch (do_meta_command(input_buffer, table)) {
                     case (MetaCommandResult::META_COMMAND_SUCCESS):
                         continue;
                     case (MetaCommandResult::META_COMMAND_UNRECOGNIZED_COMMAND):
