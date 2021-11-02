@@ -91,7 +91,7 @@ namespace db::table
         Cursor cursor{};
         cursor.table = table;
         cursor.row_num = table.num_rows;
-        cursor.end_of_table = (table.num_rows == 0);
+        cursor.end_of_table = true;
 
         return cursor;
     }
@@ -115,10 +115,10 @@ namespace db::table
         pager.file_length = file_length;
 
         for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) {
-            pager.pages[i] = NULL;
+            pager.pages[i] = nullptr;
         }
 
-        return std::move(pager);
+        return pager;
     }
 
     inline void pager_flush(Pager& pager, uint32_t page_num, uint32_t size)
@@ -148,7 +148,7 @@ namespace db::table
             exit(EXIT_FAILURE);
         }
 
-        if (pager.pages[page_num] == NULL) {
+        if (pager.pages[page_num] == nullptr) {
             void* page = std::malloc(PAGE_SIZE);
             uint32_t num_pages = pager.file_length / PAGE_SIZE;
 
@@ -171,7 +171,6 @@ namespace db::table
         return pager.pages[page_num];
     }
 
-    // inline void *row_slot(Table &table, uint32_t row_num)
     inline void* cursor_value(Cursor& cursor)
     {
         uint32_t row_num = cursor.row_num;

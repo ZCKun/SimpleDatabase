@@ -63,7 +63,6 @@ inline ExecuteResult execute_insert(const Statement &statement, Table &table)
     auto &row_to_insert = statement.row_to_insert;
     Cursor cursor = table_end(table);
     // save to table page
-    // serialize_row(&row_to_insert, row_slot(table, table.num_rows));
     serialize_row(&row_to_insert, cursor_value(cursor));
     table.num_rows += 1;
 
@@ -103,7 +102,7 @@ Table db_open(const char* filename)
     table.num_rows = num_rows;
     table.pager = pager;
 
-    return std::move(table);
+    return table;
 }
 
 void db_close(Table& table)
